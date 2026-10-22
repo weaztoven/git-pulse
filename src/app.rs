@@ -10,7 +10,7 @@ use crate::{
     event::{Event, TICK_RATE},
     github::{
         client::GithubClient,
-        models::{Conditional, FetchResult, Repo, RepoEtags, RepoInfo},
+        models::{Conditional, FetchResult, Repo, RepoEtags, RepoInfo, TrendingResults},
     },
 };
 
@@ -62,6 +62,7 @@ pub struct App {
     pub trending_repos: Vec<Repo>,
     pub trending_loading: bool,
     pub trending_error: Option<String>,
+    pub trending_rate_limit: Option<(String, String)>,
     pub my_repos: Vec<Repo>,
     pub my_repos_loading: bool,
     pub my_repos_error: Option<String>,
@@ -119,6 +120,7 @@ impl App {
             trending_repos: Vec::new(),
             trending_loading: false,
             trending_error: None,
+            trending_rate_limit: None,
             my_repos: Vec::new(),
             my_repos_loading: false,
             my_repos_error: None,
@@ -167,6 +169,9 @@ impl App {
                 ActiveTab::Trending => self.refresh_trending(),
                 ActiveTab::MyRepos => self.refresh_my_repos(),
             },
+            KeyCode::Char('o') if self.active_tab == ActiveTab::Trending => {
+                self.open_selected_repo()
+            }
             KeyCode::Char('s') if self.active_tab == ActiveTab::MyRepos => {
                 self.cycle_my_repos_sort()
             }
@@ -268,10 +273,11 @@ impl App {
         });
     }
 
-    pub fn on_trending_updated(&mut self, result: Result<Vec<Repo>, String>) {
+    pub fn on_trending_updated(&mut self, result: Result<TrendingResults, String>) {
         self.trending_loading = false;
         match result {
-            Ok(repos) => {
+            Ok(results) => {
+                let repos = results.repos;
                 if !repos.is_empty() && self.trending_table_state.selected().is_none() {
                     self.trending_table_state.select(Some(0));
                 } else if self
@@ -282,6 +288,8 @@ impl App {
                     self.trending_table_state.select(repos.len().checked_sub(1));
                 }
                 self.trending_repos = repos;
+                self.trending_rate_limit =
+                    results.rate_limit_remaining.zip(results.rate_limit_limit);
                 self.trending_error = None;
             }
             Err(error) => self.trending_error = Some(error),

@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{Block, BorderType, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
     Frame,
 };
 
@@ -74,7 +74,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 render_empty(frame, body, &palette);
             } else {
                 let [list_area, detail_area] =
-                    Layout::vertical([Constraint::Min(4), Constraint::Length(13)]).areas(body);
+                    Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                        .areas(body);
                 render_table(frame, app, list_area, &palette);
                 render_details(frame, app.selected_entry(), detail_area, &palette);
             }
@@ -106,6 +107,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
     .style(Style::default().fg(palette.muted))
     .block(
         Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(palette.border))
             .title(format!(" git-pulse v{} ", env!("CARGO_PKG_VERSION"))),
     );
@@ -118,6 +120,7 @@ fn render_empty(frame: &mut Frame, area: Rect, palette: &Palette) {
             .style(Style::default().fg(palette.foreground))
             .block(
                 Block::bordered()
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(palette.border))
                     .title(" Repositories "),
             );
@@ -125,15 +128,7 @@ fn render_empty(frame: &mut Frame, area: Rect, palette: &Palette) {
 }
 
 fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
-    let header = Row::new([
-        "Repository",
-        "Stars",
-        "Issues",
-        "Release",
-        "Last commit",
-        "Status",
-    ])
-    .style(
+    let header = Row::new(["Repository", "★ Stars", "Issues", "Language", "🍴 Forks"]).style(
         Style::default()
             .fg(palette.accent)
             .add_modifier(Modifier::BOLD),
@@ -146,10 +141,9 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette)
         .collect();
 
     let widths = [
-        Constraint::Min(24),
+        Constraint::Min(12),
         Constraint::Length(9),
         Constraint::Length(8),
-        Constraint::Length(18),
         Constraint::Length(12),
         Constraint::Length(9),
     ];
@@ -158,6 +152,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette)
         .header(header)
         .block(
             Block::bordered()
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(palette.border))
                 .title(" Repositories "),
         )
@@ -172,69 +167,172 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette)
 }
 
 fn render_trending(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
-    if app.trending_repos.is_empty() {
-        let message = if app.trending_loading {
-            "Loading popular repositories..."
-        } else if let Some(error) = &app.trending_error {
-            return frame.render_widget(
-                Paragraph::new(format!("Could not load popular repositories: {error}"))
-                    .style(Style::default().fg(palette.error))
-                    .block(
-                        Block::bordered()
-                            .border_style(Style::default().fg(palette.border))
-                            .title(" Trending "),
-                    ),
-                area,
-            );
-        } else {
-            "No popular repositories found. Press r to retry."
-        };
-        frame.render_widget(
-            Paragraph::new(message)
-                .style(Style::default().fg(palette.foreground))
-                .block(
-                    Block::bordered()
-                        .border_style(Style::default().fg(palette.border))
-                        .title(" Trending "),
-                ),
-            area,
-        );
-        return;
-    }
+    let [summary_area, content_area] =
+        Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).areas(area);
+    render_trending_summary(frame, app, summary_area, palette);
 
-    let table_area = if let Some(error) = &app.trending_error {
-        let [error_area, table_area] =
-            Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
-        frame.render_widget(
-            Paragraph::new(format!("Refresh failed: {error}"))
-                .style(Style::default().fg(palette.error))
-                .wrap(Wrap { trim: true }),
-            error_area,
-        );
-        table_area
+    let [table_area, details_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .areas(content_area);
+    render_trending_table(frame, app, table_area, palette);
+    render_trending_details(frame, app, details_area, palette);
+}
+
+fn render_trending_summary(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
+    let [language_area, starred_area, api_area] = Layout::horizontal([
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+    ])
+    .areas(area);
+
+    let top_language = app
+        .trending_repos
+        .iter()
+        .filter_map(|repo| repo.language.as_deref())
+        .fold(
+            std::collections::BTreeMap::<&str, usize>::new(),
+            |mut counts, language| {
+                *counts.entry(language).or_default() += 1;
+                counts
+            },
+        )
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(language, count)| format!("{language} ({count})"))
+        .unwrap_or_else(|| {
+            if app.trending_loading {
+                "Loading...".into()
+            } else {
+                "—".into()
+            }
+        });
+    render_summary_card(
+        frame,
+        language_area,
+        "Top Language",
+        top_language,
+        palette.accent,
+        palette,
+    );
+
+    let most_starred = app
+        .trending_repos
+        .iter()
+        .max_by_key(|repo| repo.stargazers_count)
+        .map(|repo| {
+            format!(
+                "{} · ★ {}",
+                repo.full_name,
+                format_count(repo.stargazers_count)
+            )
+        })
+        .unwrap_or_else(|| {
+            if app.trending_loading {
+                "Loading...".into()
+            } else {
+                "—".into()
+            }
+        });
+    render_summary_card(
+        frame,
+        starred_area,
+        "Most Starred Repo",
+        most_starred,
+        palette.warning,
+        palette,
+    );
+
+    let api_status = if let Some(error) = &app.trending_error {
+        format!("Error: {error}")
+    } else if app.trending_loading {
+        "Fetching repositories...".to_string()
+    } else if let Some((remaining, limit)) = &app.trending_rate_limit {
+        format!("{remaining} / {limit} requests remaining")
+    } else if app.trending_repos.is_empty() {
+        "Not loaded · press r to retry".to_string()
     } else {
-        area
+        "Loaded · rate limit unavailable".to_string()
     };
+    render_summary_card(
+        frame,
+        api_area,
+        "API Rate Limit / Status",
+        api_status,
+        if app.trending_error.is_some() {
+            palette.error
+        } else {
+            palette.success
+        },
+        palette,
+    );
+}
 
+fn render_summary_card(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    value: String,
+    value_color: Color,
+    palette: &Palette,
+) {
+    let card = Paragraph::new(value)
+        .style(
+            Style::default()
+                .fg(value_color)
+                .add_modifier(Modifier::BOLD),
+        )
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(palette.border))
+                .title(Span::styled(
+                    format!(" {title} "),
+                    Style::default().fg(palette.muted),
+                )),
+        );
+    frame.render_widget(card, area);
+}
+
+fn render_trending_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
     let rows = app.trending_repos.iter().map(|repo| {
         Row::new(vec![
-            Cell::from(repo.full_name.clone()),
-            Cell::from(format_count(repo.stargazers_count)),
-            Cell::from(format_count(repo.open_issues_count)),
-            Cell::from(repo.description.clone().unwrap_or_else(|| "-".to_string())),
+            Cell::from(Span::styled(
+                repo.full_name.clone(),
+                Style::default().fg(palette.success),
+            )),
+            Cell::from(Span::styled(
+                format!("★ {}", format_count(repo.stargazers_count)),
+                Style::default().fg(palette.warning),
+            )),
+            Cell::from(Span::styled(
+                repo.language.clone().unwrap_or_else(|| "-".into()),
+                Style::default().fg(palette.accent),
+            )),
+            Cell::from(Span::styled(
+                format_count(repo.open_issues_count),
+                Style::default().fg(palette.error),
+            )),
+            Cell::from(Span::styled(
+                format!("🍴 {}", format_count(repo.forks_count)),
+                Style::default().fg(Color::Blue),
+            )),
         ])
     });
+
     let table = Table::new(
         rows,
         [
-            Constraint::Min(24),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Percentage(50),
+            Constraint::Min(12),
+            Constraint::Length(9),
+            Constraint::Length(12),
+            Constraint::Length(8),
+            Constraint::Length(9),
         ],
     )
     .header(
-        Row::new(["Repository", "Stars", "Issues", "Description"]).style(
+        Row::new(["Repository", "★ Stars", "Language", "Issues", "🍴 Forks"]).style(
             Style::default()
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
@@ -242,8 +340,12 @@ fn render_trending(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palet
     )
     .block(
         Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(palette.border))
-            .title(" Popular public repositories (sorted by stars) "),
+            .title(format!(
+                " Popular Repositories ({}) ",
+                app.trending_repos.len()
+            )),
     )
     .row_highlight_style(
         Style::default()
@@ -251,7 +353,106 @@ fn render_trending(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palet
             .add_modifier(Modifier::BOLD),
     )
     .highlight_symbol("▶ ");
-    frame.render_stateful_widget(table, table_area, &mut app.trending_table_state);
+    frame.render_stateful_widget(table, area, &mut app.trending_table_state);
+}
+
+fn render_trending_details(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
+    let [details_area, shortcuts_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).areas(area);
+
+    let selected = app
+        .trending_table_state
+        .selected()
+        .and_then(|index| app.trending_repos.get(index));
+    let details_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette.border))
+        .title(" Trending Repository ");
+
+    if let Some(repo) = selected {
+        let language = repo.language.as_deref().unwrap_or("Unknown");
+        let description = repo
+            .description
+            .as_deref()
+            .unwrap_or("No description provided.");
+        let details = vec![
+            Line::from(Span::styled(
+                format!("📦 {}", repo.full_name),
+                Style::default()
+                    .fg(palette.success)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("◆ {language}"),
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled(
+                    format!("★ {}  ", format_count(repo.stargazers_count)),
+                    Style::default().fg(palette.warning),
+                ),
+                Span::styled(
+                    format!("🍴 {}  ", format_count(repo.forks_count)),
+                    Style::default().fg(Color::Blue),
+                ),
+                Span::styled(
+                    format!("🐛 {}", format_count(repo.open_issues_count)),
+                    Style::default().fg(palette.error),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Description",
+                Style::default()
+                    .fg(palette.muted)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(description.to_string()),
+        ];
+        frame.render_widget(
+            Paragraph::new(details)
+                .style(Style::default().fg(palette.foreground))
+                .wrap(Wrap { trim: true })
+                .block(details_block),
+            details_area,
+        );
+    } else {
+        let message = if app.trending_loading {
+            "Loading popular repositories..."
+        } else if let Some(error) = &app.trending_error {
+            error.as_str()
+        } else {
+            "Select a repository to view details."
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(if app.trending_error.is_some() {
+                    palette.error
+                } else {
+                    palette.muted
+                }))
+                .wrap(Wrap { trim: true })
+                .block(details_block),
+            details_area,
+        );
+    }
+
+    let shortcuts = Paragraph::new("[c] Copy Clone   [o] Open in Browser   [r] Refresh")
+        .style(
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(palette.border))
+                .title(" Actions "),
+        );
+    frame.render_widget(shortcuts, shortcuts_area);
 }
 
 fn render_my_repos(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
@@ -274,6 +475,7 @@ fn render_my_repos(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palet
                 .wrap(Wrap { trim: true })
                 .block(
                     Block::bordered()
+                        .border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(palette.border))
                         .title(" My Repos "),
                 ),
@@ -326,22 +528,36 @@ fn render_public_repo_table(
     let rows = repos.iter().map(|repo| {
         Row::new(vec![
             Cell::from(repo.full_name.clone()),
-            Cell::from(format_count(repo.stargazers_count)),
-            Cell::from(format_count(repo.open_issues_count)),
-            Cell::from(repo.description.clone().unwrap_or_else(|| "-".to_string())),
+            Cell::from(Span::styled(
+                format!("★ {}", format_count(repo.stargazers_count)),
+                Style::default().fg(palette.warning),
+            )),
+            Cell::from(Span::styled(
+                format_count(repo.open_issues_count),
+                Style::default().fg(palette.error),
+            )),
+            Cell::from(Span::styled(
+                repo.language.clone().unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(palette.accent),
+            )),
+            Cell::from(Span::styled(
+                format!("🍴 {}", format_count(repo.forks_count)),
+                Style::default().fg(Color::Blue),
+            )),
         ])
     });
     let table = Table::new(
         rows,
         [
-            Constraint::Min(24),
+            Constraint::Min(14),
             Constraint::Length(10),
+            Constraint::Length(9),
+            Constraint::Length(14),
             Constraint::Length(10),
-            Constraint::Percentage(50),
         ],
     )
     .header(
-        Row::new(["Repository", "Stars", "Issues", "Description"]).style(
+        Row::new(["Repository", "★ Stars", "Issues", "Language", "🍴 Forks"]).style(
             Style::default()
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
@@ -349,6 +565,7 @@ fn render_public_repo_table(
     )
     .block(
         Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(palette.border))
             .title(title),
     )
@@ -363,6 +580,7 @@ fn render_public_repo_table(
 
 fn render_my_repo_details(frame: &mut Frame, repo: Option<&Repo>, area: Rect, palette: &Palette) {
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.border))
         .title(" Repository details ");
     let Some(repo) = repo else {
@@ -377,9 +595,9 @@ fn render_my_repo_details(frame: &mut Frame, repo: Option<&Repo>, area: Rect, pa
 
     let lines = vec![
         Line::from(Span::styled(
-            repo.full_name.clone(),
+            format!("📦 {}", repo.full_name),
             Style::default()
-                .fg(palette.accent)
+                .fg(palette.success)
                 .add_modifier(Modifier::BOLD),
         )),
         label_line(
@@ -387,9 +605,24 @@ fn render_my_repo_details(frame: &mut Frame, repo: Option<&Repo>, area: Rect, pa
             repo.language.clone().unwrap_or_else(|| "-".to_string()),
             palette,
         ),
-        label_line("Stars", format_count(repo.stargazers_count), palette),
-        label_line("Forks", format_count(repo.forks_count), palette),
-        label_line("Open issues", format_count(repo.open_issues_count), palette),
+        metric_line(
+            "★ Stars",
+            format_count(repo.stargazers_count),
+            palette.warning,
+            palette,
+        ),
+        metric_line(
+            "🍴 Forks",
+            format_count(repo.forks_count),
+            Color::Blue,
+            palette,
+        ),
+        metric_line(
+            "Issues",
+            format_count(repo.open_issues_count),
+            palette.error,
+            palette,
+        ),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -401,105 +634,138 @@ fn render_my_repo_details(frame: &mut Frame, repo: Option<&Repo>, area: Rect, pa
 }
 
 fn repo_row(entry: &RepoEntry, palette: &Palette) -> Row<'static> {
-    let (status_text, status_color) = status_of(entry, palette);
-    let status = Cell::from(Span::styled(status_text, Style::default().fg(status_color)));
-
     match &entry.info {
-        Some(info) => {
-            let release = info
-                .latest_release
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |release| release.tag_name.clone());
-            let commit_date = info.latest_commit.as_ref().map_or_else(
-                || "-".to_string(),
-                |commit| commit.commit.author.date.format("%Y-%m-%d").to_string(),
-            );
-
-            Row::new(vec![
-                Cell::from(info.repo.full_name.clone()),
-                Cell::from(format_count(info.repo.stargazers_count)),
-                Cell::from(format_count(info.repo.open_issues_count)),
-                Cell::from(release),
-                Cell::from(commit_date),
-                status,
-            ])
-        }
+        Some(info) => Row::new(vec![
+            Cell::from(Span::styled(
+                info.repo.full_name.clone(),
+                Style::default().fg(palette.success),
+            )),
+            Cell::from(Span::styled(
+                format!("★ {}", format_count(info.repo.stargazers_count)),
+                Style::default().fg(palette.warning),
+            )),
+            Cell::from(Span::styled(
+                format_count(info.repo.open_issues_count),
+                Style::default().fg(palette.error),
+            )),
+            Cell::from(Span::styled(
+                info.repo
+                    .language
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(palette.accent),
+            )),
+            Cell::from(Span::styled(
+                format!("🍴 {}", format_count(info.repo.forks_count)),
+                Style::default().fg(Color::Blue),
+            )),
+        ]),
         None => Row::new(vec![
             Cell::from(entry.name.clone()),
             Cell::from("-"),
             Cell::from("-"),
             Cell::from("-"),
             Cell::from("-"),
-            status,
         ]),
-    }
-}
-
-fn status_of(entry: &RepoEntry, palette: &Palette) -> (&'static str, Color) {
-    if entry.loading {
-        ("loading", palette.warning)
-    } else if entry.error.is_some() {
-        ("error", palette.error)
-    } else if entry.info.is_some() {
-        ("ok", palette.success)
-    } else {
-        ("idle", palette.muted)
     }
 }
 
 fn render_details(frame: &mut Frame, entry: Option<&RepoEntry>, area: Rect, palette: &Palette) {
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.border))
-        .title(" Details ");
+        .title(" Repository details ");
 
     let Some(entry) = entry else {
         frame.render_widget(
-            Paragraph::new("Select a repository to see its details.").block(block),
+            Paragraph::new("Select a repository to view details.")
+                .style(Style::default().fg(palette.muted))
+                .block(block),
             area,
         );
         return;
     };
 
-    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-        entry.name.clone(),
-        Style::default()
-            .fg(palette.accent)
-            .add_modifier(Modifier::BOLD),
-    ))];
+    let Some(info) = &entry.info else {
+        let message = if entry.loading {
+            "Loading repository details...".to_string()
+        } else {
+            entry.error.as_ref().map_or_else(
+                || "Repository details are not available yet.".to_string(),
+                |e| format!("Error: {e}"),
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(if entry.error.is_some() {
+                    palette.error
+                } else {
+                    palette.muted
+                }))
+                .block(block)
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    };
 
-    if let Some(info) = &entry.info {
-        lines.push(label_line("URL", info.repo.html_url.clone(), palette));
-        lines.push(label_line(
-            "About",
+    let license = info
+        .repo
+        .license
+        .as_ref()
+        .and_then(|license| license.name.as_ref().or(license.spdx_id.as_ref()))
+        .cloned()
+        .unwrap_or_else(|| "Not specified".to_string());
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("📦 {}", info.repo.full_name),
+            Style::default()
+                .fg(palette.success)
+                .add_modifier(Modifier::BOLD),
+        )),
+        metric_line(
+            "★ Stars",
+            format_count(info.repo.stargazers_count),
+            palette.warning,
+            palette,
+        ),
+        metric_line(
+            "🍴 Forks",
+            format_count(info.repo.forks_count),
+            Color::Blue,
+            palette,
+        ),
+        metric_line(
+            "Issues",
+            format_count(info.repo.open_issues_count),
+            palette.error,
+            palette,
+        ),
+        metric_line("License", license, palette.foreground, palette),
+        metric_line(
+            "Language",
+            info.repo
+                .language
+                .clone()
+                .unwrap_or_else(|| "Not specified".to_string()),
+            palette.accent,
+            palette,
+        ),
+        Line::from(Span::styled(
+            "Description",
+            Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(
             info.repo
                 .description
                 .clone()
-                .unwrap_or_else(|| "-".to_string()),
-            palette,
-        ));
+                .unwrap_or_else(|| "No description provided.".to_string()),
+        ),
+    ];
 
-        let release = match &info.latest_release {
-            Some(release) => {
-                let date = release
-                    .published_at
-                    .map_or_else(|| "-".to_string(), |d| d.format("%Y-%m-%d").to_string());
-                format!("{} ({})", release.tag_name, date)
-            }
-            None => "none".to_string(),
-        };
-        lines.push(label_line("Release", release, palette));
-
-        let commit = match &info.latest_commit {
-            Some(commit) => format!(
-                "{} {} - {} ({})",
-                commit.short_sha(),
-                commit.summary(),
-                commit.commit.author.name,
-                commit.commit.author.date.format("%Y-%m-%d %H:%M UTC"),
-            ),
-            None => "none".to_string(),
-        };
-        lines.push(label_line("Commit", commit, palette));
+    if !info.commit_history.is_empty() {
         lines.push(Line::from(Span::styled(
             "Recent commits",
             Style::default()
@@ -515,22 +781,12 @@ fn render_details(frame: &mut Frame, entry: Option<&RepoEntry>, area: Rect, pale
                 commit.commit.author.date.format("%Y-%m-%d"),
             )));
         }
-    } else if entry.loading {
-        lines.push(Line::from("Loading..."));
     }
 
     if let Some(updated) = entry.last_updated {
-        lines.push(label_line(
-            "Updated",
-            updated.format("%H:%M:%S").to_string(),
-            palette,
-        ));
-    }
-
-    if let Some(error) = &entry.error {
         lines.push(Line::from(Span::styled(
-            format!("Error: {error}"),
-            Style::default().fg(palette.error),
+            format!("Updated {}", updated.format("%H:%M:%S")),
+            Style::default().fg(palette.muted),
         )));
     }
 
@@ -541,6 +797,18 @@ fn render_details(frame: &mut Frame, entry: Option<&RepoEntry>, area: Rect, pale
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn metric_line(label: &str, value: String, color: Color, palette: &Palette) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<12}"),
+            Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value, Style::default().fg(color)),
+    ])
 }
 
 fn label_line(label: &str, value: String, palette: &Palette) -> Line<'static> {
@@ -586,13 +854,26 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
 }
 
 fn format_count(value: u64) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
-            formatted.push(',');
-        }
-        formatted.push(ch);
+    if value >= 1_000_000_000 {
+        return format_compact(value, 1_000_000_000, "b");
     }
-    formatted
+    if value >= 1_000_000 {
+        return format_compact(value, 1_000_000, "m");
+    }
+    if value >= 1_000 {
+        return format_compact(value, 1_000, "k");
+    }
+
+    let digits = value.to_string();
+    digits
+}
+
+fn format_compact(value: u64, divisor: u64, suffix: &str) -> String {
+    let whole = value / divisor;
+    let tenths = (value % divisor) * 10 / divisor;
+    if whole < 10 && tenths > 0 {
+        format!("{whole}.{tenths}{suffix}")
+    } else {
+        format!("{whole}{suffix}")
+    }
 }

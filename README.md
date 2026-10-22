@@ -85,6 +85,7 @@ username = "weaztoven"
 
 # Repositories to show in the Watchlist tab, in owner/repository format.
 repos = [
+  "weaztoven/cleaner-cli",
   "rust-lang/rust",
   "ratatui/ratatui",
 ]

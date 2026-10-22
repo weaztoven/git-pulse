@@ -7,7 +7,9 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 
-use super::models::{CommitItem, Conditional, FetchResult, Release, Repo, RepoEtags};
+use super::models::{
+    CommitItem, Conditional, FetchResult, Release, Repo, RepoEtags, TrendingResults,
+};
 use crate::config::GithubConfig;
 
 #[derive(serde::Deserialize)]
@@ -111,7 +113,7 @@ impl GithubClient {
         }
     }
 
-    pub async fn fetch_trending_repos(&self) -> Result<Vec<Repo>> {
+    pub async fn fetch_trending_repos(&self) -> Result<TrendingResults> {
         let url = format!("{}/search/repositories", self.base_url);
         let user_agent = concat!("git-pulse/", env!("CARGO_PKG_VERSION"));
         let response = self
@@ -122,7 +124,7 @@ impl GithubClient {
                 ("q", "stars:>1000"),
                 ("sort", "stars"),
                 ("order", "desc"),
-                ("per_page", "25"),
+                ("per_page", "100"),
             ])
             .send()
             .await
@@ -133,8 +135,12 @@ impl GithubClient {
             .headers()
             .get("x-ratelimit-remaining")
             .and_then(|value| value.to_str().ok())
-            .unwrap_or("unknown")
-            .to_owned();
+            .map(str::to_owned);
+        let rate_limit_limit = response
+            .headers()
+            .get("x-ratelimit-limit")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let body = response
             .text()
             .await
@@ -146,11 +152,12 @@ impl GithubClient {
             } else {
                 body.chars().take(512).collect()
             };
-            if rate_limit_remaining == "0" {
+            if rate_limit_remaining.as_deref() == Some("0") {
                 bail!("GitHub API rate limit exceeded for {url} (remaining: 0): {detail}");
             }
             bail!(
-                "GitHub API returned {status} for {url} (rate limit remaining: {rate_limit_remaining}): {detail}"
+                "GitHub API returned {status} for {url} (rate limit remaining: {}): {detail}",
+                rate_limit_remaining.as_deref().unwrap_or("unknown")
             );
         }
 
@@ -158,7 +165,11 @@ impl GithubClient {
             let detail: String = body.chars().take(512).collect();
             format!("Could not parse the response from {url}: {detail}")
         })?;
-        Ok(results.items)
+        Ok(TrendingResults {
+            repos: results.items,
+            rate_limit_remaining,
+            rate_limit_limit,
+        })
     }
 
     async fn get_json<T: DeserializeOwned>(

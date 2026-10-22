@@ -6,7 +6,7 @@ use std::{
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
 use tokio::sync::mpsc;
 
-use crate::github::models::{FetchResult, Repo};
+use crate::github::models::{FetchResult, Repo, TrendingResults};
 
 pub const TICK_RATE: Duration = Duration::from_millis(250);
 
@@ -18,7 +18,7 @@ pub enum Event {
         name: String,
         result: Result<FetchResult, String>,
     },
-    TrendingUpdated(Result<Vec<Repo>, String>),
+    TrendingUpdated(Result<TrendingResults, String>),
     MyReposUpdated(Result<Vec<Repo>, String>),
 }
 

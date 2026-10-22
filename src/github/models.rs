@@ -16,6 +16,21 @@ pub struct Repo {
     pub pushed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub license: Option<RepoLicense>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrendingResults {
+    pub repos: Vec<Repo>,
+    pub rate_limit_remaining: Option<String>,
+    pub rate_limit_limit: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoLicense {
+    pub name: Option<String>,
+    pub spdx_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

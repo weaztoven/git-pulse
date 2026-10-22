@@ -32,7 +32,7 @@ impl Default for GithubConfig {
             token: None,
             username: String::new(),
             api_url: "https://api.github.com".to_string(),
-            repos: Vec::new(),
+            repos: vec!["weaztoven/cleaner-cli".to_string()],
         }
     }
 }
