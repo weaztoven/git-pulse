@@ -38,7 +38,7 @@ GitHub API access by default and requires no token or OAuth sign-in.
 Clone the repository and build the optimized executable:
 
 ```sh
-git clone https://github.com/<your-account>/git-pulse.git
+git clone https://github.com/weaztoven/git-pulse.git
 cd git-pulse
 cargo build --release
 ```
@@ -73,7 +73,7 @@ Example:
 ```toml
 [github]
 # Optional. Enables the My Repos tab for this public GitHub account.
-username = "octocat"
+username = "weaztoven"
 
 # Repositories to show in the Watchlist tab, in owner/repository format.
 repos = [
