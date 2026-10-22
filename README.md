@@ -38,12 +38,13 @@ GitHub API access by default and requires no token or OAuth sign-in.
 
 ## Installation
 
-Clone the repository and build the optimized executable:
-
 ### Via Cargo (Recommended)
 ```bash
 cargo install git-pulse
 ```
+
+Clone the repository and build the optimized executable:
+
 ```sh
 git clone https://github.com/weaztoven/git-pulse.git
 cd git-pulse
