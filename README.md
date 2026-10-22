@@ -98,6 +98,11 @@ Example configuration:
 # Optional. Enables My Repos for this public GitHub account.
 username = "weaztoven"
 
+# Optional: GitHub Personal Access Token to increase API rate limit
+# (60 -> 5,000 requests/hour). No scopes are needed for public repositories.
+# Keep this secret; do not commit a real token to version control.
+# token = "ghp_your_personal_access_token"
+
 # Repositories to show in Watchlist, in owner/repository format.
 repos = [
   "weaztoven/cleaner-cli",
@@ -118,7 +123,11 @@ theme = "catppuccin"
 
 No token is needed for public repositories. When using the public API without
 authentication, the Watchlist refresh interval is limited to at least 300
-seconds.
+seconds. For a higher GitHub API rate limit, set `github.token` to a Personal
+Access Token (PAT); authenticated requests generally receive up to 5,000
+requests per hour instead of 60. Public repository tracking requires no
+additional permissions or scopes. Keep your PAT private and out of committed
+configuration files.
 
 ## Keybindings
 

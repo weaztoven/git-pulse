@@ -42,7 +42,8 @@ impl GithubClient {
             .filter(|token| !token.is_empty());
 
         if let Some(token) = token {
-            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+            let authorization = format!("{} {}", "Bearer", token);
+            let mut value = HeaderValue::from_str(&authorization)
                 .context("The GitHub token contains invalid characters")?;
             value.set_sensitive(true);
             headers.insert(header::AUTHORIZATION, value);
