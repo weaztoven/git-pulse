@@ -1,3 +1,6 @@
+[![Crates.io](https://img.shields.io/crates/v/git-pulse.svg)](https://crates.io/crates/git-pulse)
+[![Crates.io Downloads](https://img.shields.io/crates/d/git-pulse.svg)](https://crates.io/crates/git-pulse)
+[![Crates.io License](https://img.shields.io/crates/l/git-pulse.svg)](https://crates.io/crates/git-pulse)
 # git-pulse
 
 **A fast, Rust-powered GitHub TUI tracker with ETag optimization.**
@@ -37,6 +40,10 @@ GitHub API access by default and requires no token or OAuth sign-in.
 
 Clone the repository and build the optimized executable:
 
+### Via Cargo (Recommended)
+```bash
+cargo install git-pulse
+```
 ```sh
 git clone https://github.com/weaztoven/git-pulse.git
 cd git-pulse
