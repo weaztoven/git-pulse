@@ -8,7 +8,7 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 
 use super::models::{
-    CommitItem, Conditional, FetchResult, Release, Repo, RepoEtags, TrendingResults,
+    CommitItem, Conditional, FetchResult, Release, Repo, RepoEtags, TrendingRange, TrendingResults,
 };
 use crate::config::GithubConfig;
 
@@ -113,16 +113,32 @@ impl GithubClient {
         }
     }
 
-    pub async fn fetch_trending_repos(&self) -> Result<TrendingResults> {
+    pub async fn fetch_trending_repos(&self, range: TrendingRange) -> Result<TrendingResults> {
         let url = format!("{}/search/repositories", self.base_url);
         let user_agent = concat!("git-pulse/", env!("CARGO_PKG_VERSION"));
+        let query = match range {
+            TrendingRange::AllTime => "stars:>1000".to_string(),
+            TrendingRange::Daily => {
+                let since = chrono::Utc::now().date_naive();
+                format!("stars:>0 pushed:>={since}")
+            }
+            TrendingRange::Weekly => {
+                let since = chrono::Utc::now().date_naive() - chrono::Duration::days(7);
+                format!("stars:>0 pushed:>={since}")
+            }
+        };
+        let sort = if range == TrendingRange::AllTime {
+            "stars"
+        } else {
+            "updated"
+        };
         let response = self
             .http
             .get(&url)
             .header(header::USER_AGENT, user_agent)
             .query(&[
-                ("q", "stars:>1000"),
-                ("sort", "stars"),
+                ("q", query.as_str()),
+                ("sort", sort),
                 ("order", "desc"),
                 ("per_page", "100"),
             ])

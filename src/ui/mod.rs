@@ -210,7 +210,7 @@ fn render_trending_summary(frame: &mut Frame, app: &App, area: Rect, palette: &P
     render_summary_card(
         frame,
         language_area,
-        "Top Language",
+        &format!("{} · Top Language", app.trending_range.label()),
         top_language,
         palette.accent,
         palette,
@@ -343,8 +343,9 @@ fn render_trending_table(frame: &mut Frame, app: &mut App, area: Rect, palette: 
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(palette.border))
             .title(format!(
-                " Popular Repositories ({}) ",
-                app.trending_repos.len()
+                " Trending {} · {} repositories · press t to change range ",
+                app.trending_range.label(),
+                app.trending_repos.len(),
             )),
     )
     .row_highlight_style(
@@ -439,19 +440,20 @@ fn render_trending_details(frame: &mut Frame, app: &App, area: Rect, palette: &P
         );
     }
 
-    let shortcuts = Paragraph::new("[c] Copy Clone   [o] Open in Browser   [r] Refresh")
-        .style(
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(palette.border))
-                .title(" Actions "),
-        );
+    let shortcuts =
+        Paragraph::new("[t] Time Range   [c] Copy Clone   [o] Open in Browser   [r] Refresh")
+            .style(
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(palette.border))
+                    .title(" Actions "),
+            );
     frame.render_widget(shortcuts, shortcuts_area);
 }
 

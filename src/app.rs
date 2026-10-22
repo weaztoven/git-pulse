@@ -10,7 +10,9 @@ use crate::{
     event::{Event, TICK_RATE},
     github::{
         client::GithubClient,
-        models::{Conditional, FetchResult, Repo, RepoEtags, RepoInfo, TrendingResults},
+        models::{
+            Conditional, FetchResult, Repo, RepoEtags, RepoInfo, TrendingRange, TrendingResults,
+        },
     },
 };
 
@@ -63,6 +65,7 @@ pub struct App {
     pub trending_loading: bool,
     pub trending_error: Option<String>,
     pub trending_rate_limit: Option<(String, String)>,
+    pub trending_range: TrendingRange,
     pub my_repos: Vec<Repo>,
     pub my_repos_loading: bool,
     pub my_repos_error: Option<String>,
@@ -121,6 +124,7 @@ impl App {
             trending_loading: false,
             trending_error: None,
             trending_rate_limit: None,
+            trending_range: TrendingRange::AllTime,
             my_repos: Vec::new(),
             my_repos_loading: false,
             my_repos_error: None,
@@ -171,6 +175,9 @@ impl App {
             },
             KeyCode::Char('o') if self.active_tab == ActiveTab::Trending => {
                 self.open_selected_repo()
+            }
+            KeyCode::Char('t') if self.active_tab == ActiveTab::Trending => {
+                self.cycle_trending_range()
             }
             KeyCode::Char('s') if self.active_tab == ActiveTab::MyRepos => {
                 self.cycle_my_repos_sort()
@@ -257,23 +264,37 @@ impl App {
     }
 
     pub fn refresh_trending(&mut self) {
-        if self.trending_loading {
-            return;
-        }
         self.trending_loading = true;
         self.trending_error = None;
+        let range = self.trending_range;
         let client = self.client.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = client
-                .fetch_trending_repos()
+                .fetch_trending_repos(range)
                 .await
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::TrendingUpdated(result));
+            let _ = tx.send(Event::TrendingUpdated { range, result });
         });
     }
 
-    pub fn on_trending_updated(&mut self, result: Result<TrendingResults, String>) {
+    fn cycle_trending_range(&mut self) {
+        self.trending_range = match self.trending_range {
+            TrendingRange::AllTime => TrendingRange::Daily,
+            TrendingRange::Daily => TrendingRange::Weekly,
+            TrendingRange::Weekly => TrendingRange::AllTime,
+        };
+        self.refresh_trending();
+    }
+
+    pub fn on_trending_updated(
+        &mut self,
+        range: TrendingRange,
+        result: Result<TrendingResults, String>,
+    ) {
+        if range != self.trending_range {
+            return;
+        }
         self.trending_loading = false;
         match result {
             Ok(results) => {

@@ -27,6 +27,23 @@ pub struct TrendingResults {
     pub rate_limit_limit: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrendingRange {
+    AllTime,
+    Daily,
+    Weekly,
+}
+
+impl TrendingRange {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AllTime => "All-Time",
+            Self::Daily => "Today",
+            Self::Weekly => "This Week",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepoLicense {
     pub name: Option<String>,

@@ -45,7 +45,9 @@ async fn run(terminal: &mut Tui, config: &Config, client: GithubClient) -> Resul
             Some(Event::Tick) => app.on_tick(),
             Some(Event::Resize) => {}
             Some(Event::RepoUpdated { name, result }) => app.on_repo_updated(&name, result),
-            Some(Event::TrendingUpdated(result)) => app.on_trending_updated(result),
+            Some(Event::TrendingUpdated { range, result }) => {
+                app.on_trending_updated(range, result)
+            }
             Some(Event::MyReposUpdated(result)) => app.on_my_repos_updated(result),
             None => break,
         }
