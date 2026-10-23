@@ -1,3 +1,4 @@
+![git-pulse demo](demo.gif)
 <div align="center">
 
 # git-pulse
