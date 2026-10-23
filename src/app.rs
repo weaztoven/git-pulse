@@ -6,7 +6,7 @@ use ratatui::widgets::TableState;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config,
+    config::{Config, ThemeConfig},
     event::{Event, TICK_RATE},
     github::{
         client::GithubClient,
@@ -76,7 +76,10 @@ pub struct App {
     pub refresh_interval_secs: u64,
     pub status_message: Option<(String, Instant)>,
     pub theme: String,
+    pub custom_theme: ThemeConfig,
     pub github_username: String,
+    pub filter_query: String,
+    pub filter_active: bool,
     tick_count: u64,
     ticks_per_refresh: u64,
     client: GithubClient,
@@ -135,7 +138,10 @@ impl App {
             refresh_interval_secs,
             status_message: None,
             theme: config.ui.theme.clone(),
+            custom_theme: config.theme.clone(),
             github_username: config.github.username.clone(),
+            filter_query: String::new(),
+            filter_active: false,
             tick_count: 0,
             ticks_per_refresh,
             client,
@@ -158,11 +164,35 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+
+        if self.filter_active {
+            match key.code {
+                KeyCode::Esc => {
+                    self.filter_active = false;
+                    self.filter_query.clear();
+                    self.update_selection_for_filter();
+                }
+                KeyCode::Enter => self.filter_active = false,
+                KeyCode::Backspace => {
+                    self.filter_query.pop();
+                    self.update_selection_for_filter();
+                }
+                KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.filter_query.push(character);
+                    self.update_selection_for_filter();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.running = false,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.running = false
-            }
+            KeyCode::Char('/') => self.filter_active = true,
             KeyCode::Tab => self.switch_tab(),
             KeyCode::Down | KeyCode::Char('j') => self.select_next(),
             KeyCode::Up | KeyCode::Char('k') => self.select_previous(),
@@ -188,8 +218,96 @@ impl App {
             KeyCode::Char('p') if self.active_tab == ActiveTab::MyRepos => {
                 self.open_selected_my_repo_page("pulls")
             }
+            KeyCode::Char('T') => self.cycle_theme(),
             _ => {}
         }
+    }
+
+    fn cycle_theme(&mut self) {
+        self.theme = match self.theme.to_ascii_lowercase().as_str() {
+            "catppuccin" => "nord",
+            "nord" => "dracula",
+            "dracula" if self.custom_theme.has_colors() => "custom",
+            "dracula" | "custom" => "catppuccin",
+            _ => "catppuccin",
+        }
+        .to_string();
+    }
+
+    pub fn visible_repo_indices(&self) -> Vec<usize> {
+        self.repos
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                self.matches_filter(
+                    &entry.name,
+                    entry
+                        .info
+                        .as_ref()
+                        .and_then(|info| info.repo.language.as_deref()),
+                    entry
+                        .info
+                        .as_ref()
+                        .and_then(|info| info.repo.description.as_deref()),
+                )
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub fn visible_trending_indices(&self) -> Vec<usize> {
+        self.visible_repo_list_indices(&self.trending_repos)
+    }
+
+    pub fn visible_my_repo_indices(&self) -> Vec<usize> {
+        self.visible_repo_list_indices(&self.my_repos)
+    }
+
+    fn visible_repo_list_indices(&self, repos: &[Repo]) -> Vec<usize> {
+        repos
+            .iter()
+            .enumerate()
+            .filter(|(_, repo)| {
+                self.matches_filter(
+                    &repo.full_name,
+                    repo.language.as_deref(),
+                    repo.description.as_deref(),
+                )
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn matches_filter(
+        &self,
+        name: &str,
+        language: Option<&str>,
+        description: Option<&str>,
+    ) -> bool {
+        let query = self.filter_query.trim().to_lowercase();
+        query.is_empty()
+            || name.to_lowercase().contains(&query)
+            || language.is_some_and(|value| value.to_lowercase().contains(&query))
+            || description.is_some_and(|value| value.to_lowercase().contains(&query))
+    }
+
+    fn update_selection_for_filter(&mut self) {
+        let (indices, state) = match self.active_tab {
+            ActiveTab::Watchlist => (self.visible_repo_indices(), &mut self.watchlist_table_state),
+            ActiveTab::Trending => (
+                self.visible_trending_indices(),
+                &mut self.trending_table_state,
+            ),
+            ActiveTab::MyRepos => (
+                self.visible_my_repo_indices(),
+                &mut self.my_repos_table_state,
+            ),
+        };
+        let selected = state
+            .selected()
+            .unwrap_or(0)
+            .min(indices.len().saturating_sub(1));
+        state.select((!indices.is_empty()).then_some(selected));
     }
 
     fn cycle_my_repos_sort(&mut self) {
@@ -198,10 +316,12 @@ impl App {
     }
 
     fn sort_my_repos(&mut self) {
+        let visible_indices = self.visible_my_repo_indices();
         let selected_name = self
             .my_repos_table_state
             .selected()
-            .and_then(|index| self.my_repos.get(index))
+            .and_then(|index| visible_indices.get(index))
+            .and_then(|index| self.my_repos.get(*index))
             .map(|repo| repo.full_name.clone());
         match self.my_repos_sort {
             MyReposSort::Updated => self.my_repos.sort_by(|left, right| {
@@ -220,12 +340,17 @@ impl App {
             }),
         }
         if let Some(selected_name) = selected_name {
-            let selected_index = self
+            let selected_underlying_index = self
                 .my_repos
                 .iter()
                 .position(|repo| repo.full_name == selected_name);
+            let selected_index = selected_underlying_index.and_then(|underlying| {
+                self.visible_my_repo_indices()
+                    .iter()
+                    .position(|index| *index == underlying)
+            });
             self.my_repos_table_state.select(selected_index);
-        } else if !self.my_repos.is_empty() {
+        } else if !self.visible_my_repo_indices().is_empty() {
             self.my_repos_table_state.select(Some(0));
         }
     }
@@ -234,6 +359,7 @@ impl App {
         let Some(name) = self
             .my_repos_table_state
             .selected()
+            .and_then(|index| self.visible_my_repo_indices().get(index).copied())
             .and_then(|index| self.my_repos.get(index))
             .map(|repo| repo.full_name.clone())
         else {
@@ -261,6 +387,7 @@ impl App {
             ActiveTab::MyRepos if self.my_repos.is_empty() => self.refresh_my_repos(),
             _ => {}
         }
+        self.update_selection_for_filter();
     }
 
     pub fn refresh_trending(&mut self) {
@@ -301,14 +428,9 @@ impl App {
                 let repos = results.repos;
                 if !repos.is_empty() && self.trending_table_state.selected().is_none() {
                     self.trending_table_state.select(Some(0));
-                } else if self
-                    .trending_table_state
-                    .selected()
-                    .is_some_and(|index| index >= repos.len())
-                {
-                    self.trending_table_state.select(repos.len().checked_sub(1));
                 }
                 self.trending_repos = repos;
+                self.update_selection_for_filter();
                 self.trending_rate_limit =
                     results.rate_limit_remaining.zip(results.rate_limit_limit);
                 self.trending_error = None;
@@ -348,15 +470,10 @@ impl App {
             Ok(repos) => {
                 if !repos.is_empty() && self.my_repos_table_state.selected().is_none() {
                     self.my_repos_table_state.select(Some(0));
-                } else if self
-                    .my_repos_table_state
-                    .selected()
-                    .is_some_and(|index| index >= repos.len())
-                {
-                    self.my_repos_table_state.select(repos.len().checked_sub(1));
                 }
                 self.my_repos = repos;
                 self.sort_my_repos();
+                self.update_selection_for_filter();
                 self.my_repos_error = None;
             }
             Err(error) => self.my_repos_error = Some(error),
@@ -446,6 +563,7 @@ impl App {
     pub fn selected_entry(&self) -> Option<&RepoEntry> {
         self.watchlist_table_state
             .selected()
+            .and_then(|index| self.visible_repo_indices().get(index).copied())
             .and_then(|index| self.repos.get(index))
     }
 
@@ -491,11 +609,13 @@ impl App {
             ActiveTab::Trending => self
                 .trending_table_state
                 .selected()
+                .and_then(|index| self.visible_trending_indices().get(index).copied())
                 .and_then(|index| self.trending_repos.get(index))
                 .map(|repo| repo.full_name.clone()),
             ActiveTab::MyRepos => self
                 .my_repos_table_state
                 .selected()
+                .and_then(|index| self.visible_my_repo_indices().get(index).copied())
                 .and_then(|index| self.my_repos.get(index))
                 .map(|repo| repo.full_name.clone()),
         }
@@ -537,9 +657,9 @@ impl App {
 
     fn select_next(&mut self) {
         let item_count = match self.active_tab {
-            ActiveTab::Watchlist => self.repos.len(),
-            ActiveTab::Trending => self.trending_repos.len(),
-            ActiveTab::MyRepos => self.my_repos.len(),
+            ActiveTab::Watchlist => self.visible_repo_indices().len(),
+            ActiveTab::Trending => self.visible_trending_indices().len(),
+            ActiveTab::MyRepos => self.visible_my_repo_indices().len(),
         };
         if item_count == 0 {
             return;
@@ -558,9 +678,9 @@ impl App {
 
     fn select_previous(&mut self) {
         let item_count = match self.active_tab {
-            ActiveTab::Watchlist => self.repos.len(),
-            ActiveTab::Trending => self.trending_repos.len(),
-            ActiveTab::MyRepos => self.my_repos.len(),
+            ActiveTab::Watchlist => self.visible_repo_indices().len(),
+            ActiveTab::Trending => self.visible_trending_indices().len(),
+            ActiveTab::MyRepos => self.visible_my_repo_indices().len(),
         };
         if item_count == 0 {
             return;
@@ -575,5 +695,82 @@ impl App {
             _ => item_count - 1,
         };
         state.select(Some(previous));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::mpsc;
+
+    use super::App;
+    use crate::{
+        config::Config,
+        github::{client::GithubClient, models::Repo},
+    };
+
+    fn test_app() -> App {
+        let config = Config::default();
+        let client = GithubClient::new(&config.github).unwrap();
+        let (tx, _) = mpsc::unbounded_channel();
+        let mut app = App::new(&config, client, tx);
+        app.my_repos = vec![
+            Repo {
+                full_name: "rust-lang/rust".to_string(),
+                description: Some("A language empowering everyone".to_string()),
+                stargazers_count: 1,
+                open_issues_count: 0,
+                html_url: "https://github.com/rust-lang/rust".to_string(),
+                language: Some("Rust".to_string()),
+                forks_count: 0,
+                pushed_at: None,
+                updated_at: None,
+                license: None,
+            },
+            Repo {
+                full_name: "ratatui/ratatui".to_string(),
+                description: Some("Terminal UI framework".to_string()),
+                stargazers_count: 1,
+                open_issues_count: 0,
+                html_url: "https://github.com/ratatui/ratatui".to_string(),
+                language: Some("Rust".to_string()),
+                forks_count: 0,
+                pushed_at: None,
+                updated_at: None,
+                license: None,
+            },
+        ];
+        app
+    }
+
+    #[test]
+    fn quick_filter_matches_names_languages_and_descriptions_case_insensitively() {
+        let mut app = test_app();
+        app.filter_query = "TERMINAL".to_string();
+        assert_eq!(app.visible_my_repo_indices(), vec![1]);
+
+        app.filter_query = "RUST".to_string();
+        assert_eq!(app.visible_my_repo_indices(), vec![0, 1]);
+
+        app.filter_query = "RUST-LANG".to_string();
+        assert_eq!(app.visible_my_repo_indices(), vec![0]);
+
+        app.filter_query = "r".to_string();
+        assert_eq!(app.visible_my_repo_indices(), vec![0, 1]);
+        app.filter_query.pop();
+        app.filter_query.clear();
+        assert_eq!(app.visible_my_repo_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn slash_opens_filter_and_escape_clears_it() {
+        let mut app = test_app();
+        app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert!(app.filter_active);
+        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(app.filter_query, "r");
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.filter_active);
+        assert!(app.filter_query.is_empty());
     }
 }

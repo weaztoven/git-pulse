@@ -8,11 +8,13 @@ use ratatui::{
 
 use crate::{
     app::{ActiveTab, App, RepoEntry},
+    config::{parse_hex_color, ThemeConfig},
     github::models::Repo,
 };
 
 struct Palette {
     foreground: Color,
+    background: Color,
     accent: Color,
     border: Color,
     muted: Color,
@@ -22,10 +24,11 @@ struct Palette {
     success: Color,
 }
 
-fn palette(theme: &str) -> Palette {
-    match theme.to_ascii_lowercase().as_str() {
+fn palette(theme: &str, custom: &ThemeConfig) -> Palette {
+    let mut palette = match theme.to_ascii_lowercase().as_str() {
         "nord" => Palette {
             foreground: Color::Rgb(216, 222, 233),
+            background: Color::Rgb(46, 52, 64),
             accent: Color::Rgb(136, 192, 208),
             border: Color::Rgb(76, 86, 106),
             muted: Color::Rgb(129, 161, 193),
@@ -36,6 +39,7 @@ fn palette(theme: &str) -> Palette {
         },
         "dracula" => Palette {
             foreground: Color::Rgb(248, 248, 242),
+            background: Color::Rgb(40, 42, 54),
             accent: Color::Rgb(189, 147, 249),
             border: Color::Rgb(98, 114, 164),
             muted: Color::Rgb(139, 233, 253),
@@ -46,6 +50,7 @@ fn palette(theme: &str) -> Palette {
         },
         _ => Palette {
             foreground: Color::Rgb(205, 214, 244),
+            background: Color::Rgb(30, 30, 46),
             accent: Color::Rgb(203, 166, 247),
             border: Color::Rgb(88, 91, 112),
             muted: Color::Rgb(147, 153, 178),
@@ -54,15 +59,37 @@ fn palette(theme: &str) -> Palette {
             error: Color::Rgb(243, 139, 168),
             success: Color::Rgb(166, 227, 161),
         },
+    };
+
+    if theme.eq_ignore_ascii_case("custom") {
+        palette.accent = custom_color(custom.primary.as_deref(), palette.accent);
+        palette.muted = custom_color(custom.secondary.as_deref(), palette.muted);
+        palette.foreground = custom_color(custom.text.as_deref(), palette.foreground);
+        palette.background = custom_color(custom.background.as_deref(), palette.background);
+        palette.border = custom_color(custom.border.as_deref(), palette.border);
+        palette.highlight = custom_color(custom.highlight.as_deref(), palette.highlight);
     }
+    palette
+}
+
+fn custom_color(value: Option<&str>, fallback: Color) -> Color {
+    value
+        .and_then(|hex| parse_hex_color(hex).ok())
+        .map(|(red, green, blue)| Color::Rgb(red, green, blue))
+        .unwrap_or(fallback)
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let palette = palette(&app.theme);
+    let palette = palette(&app.theme, &app.custom_theme);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(palette.background)),
+        frame.area(),
+    );
+    let footer_height = if app.filter_active { 3 } else { 1 };
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .areas(frame.area());
 
@@ -70,7 +97,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     match app.active_tab {
         ActiveTab::Watchlist => {
-            if app.repos.is_empty() {
+            if app.repos.is_empty() && app.filter_query.is_empty() {
                 render_empty(frame, body, &palette);
             } else {
                 let [list_area, detail_area] =
@@ -134,9 +161,10 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette)
             .add_modifier(Modifier::BOLD),
     );
 
-    let rows: Vec<Row> = app
-        .repos
+    let visible_indices = app.visible_repo_indices();
+    let rows: Vec<Row> = visible_indices
         .iter()
+        .filter_map(|index| app.repos.get(*index))
         .map(|entry| repo_row(entry, palette))
         .collect();
 
@@ -154,7 +182,11 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette)
             Block::bordered()
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(palette.border))
-                .title(" Repositories "),
+                .title(format!(
+                    " Repositories ({}/{}) ",
+                    visible_indices.len(),
+                    app.repos.len()
+                )),
         )
         .row_highlight_style(
             Style::default()
@@ -186,9 +218,14 @@ fn render_trending_summary(frame: &mut Frame, app: &App, area: Rect, palette: &P
     ])
     .areas(area);
 
-    let top_language = app
-        .trending_repos
+    let visible_indices = app.visible_trending_indices();
+    let visible_repos: Vec<&Repo> = visible_indices
         .iter()
+        .filter_map(|index| app.trending_repos.get(*index))
+        .collect();
+    let top_language = visible_indices
+        .iter()
+        .filter_map(|index| app.trending_repos.get(*index))
         .filter_map(|repo| repo.language.as_deref())
         .fold(
             std::collections::BTreeMap::<&str, usize>::new(),
@@ -216,8 +253,7 @@ fn render_trending_summary(frame: &mut Frame, app: &App, area: Rect, palette: &P
         palette,
     );
 
-    let most_starred = app
-        .trending_repos
+    let most_starred = visible_repos
         .iter()
         .max_by_key(|repo| repo.stargazers_count)
         .map(|repo| {
@@ -296,30 +332,34 @@ fn render_summary_card(
 }
 
 fn render_trending_table(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
-    let rows = app.trending_repos.iter().map(|repo| {
-        Row::new(vec![
-            Cell::from(Span::styled(
-                repo.full_name.clone(),
-                Style::default().fg(palette.success),
-            )),
-            Cell::from(Span::styled(
-                format!("★ {}", format_count(repo.stargazers_count)),
-                Style::default().fg(palette.warning),
-            )),
-            Cell::from(Span::styled(
-                repo.language.clone().unwrap_or_else(|| "-".into()),
-                Style::default().fg(palette.accent),
-            )),
-            Cell::from(Span::styled(
-                format_count(repo.open_issues_count),
-                Style::default().fg(palette.error),
-            )),
-            Cell::from(Span::styled(
-                format!("🍴 {}", format_count(repo.forks_count)),
-                Style::default().fg(Color::Blue),
-            )),
-        ])
-    });
+    let visible_indices = app.visible_trending_indices();
+    let rows = visible_indices
+        .iter()
+        .filter_map(|index| app.trending_repos.get(*index))
+        .map(|repo| {
+            Row::new(vec![
+                Cell::from(Span::styled(
+                    repo.full_name.clone(),
+                    Style::default().fg(palette.success),
+                )),
+                Cell::from(Span::styled(
+                    format!("★ {}", format_count(repo.stargazers_count)),
+                    Style::default().fg(palette.warning),
+                )),
+                Cell::from(Span::styled(
+                    repo.language.clone().unwrap_or_else(|| "-".into()),
+                    Style::default().fg(palette.accent),
+                )),
+                Cell::from(Span::styled(
+                    format_count(repo.open_issues_count),
+                    Style::default().fg(palette.error),
+                )),
+                Cell::from(Span::styled(
+                    format!("🍴 {}", format_count(repo.forks_count)),
+                    Style::default().fg(Color::Blue),
+                )),
+            ])
+        });
 
     let table = Table::new(
         rows,
@@ -345,7 +385,7 @@ fn render_trending_table(frame: &mut Frame, app: &mut App, area: Rect, palette: 
             .title(format!(
                 " Trending {} · {} repositories · press t to change range ",
                 app.trending_range.label(),
-                app.trending_repos.len(),
+                visible_indices.len(),
             )),
     )
     .row_highlight_style(
@@ -361,10 +401,12 @@ fn render_trending_details(frame: &mut Frame, app: &App, area: Rect, palette: &P
     let [details_area, shortcuts_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).areas(area);
 
+    let visible_indices = app.visible_trending_indices();
     let selected = app
         .trending_table_state
         .selected()
-        .and_then(|index| app.trending_repos.get(index));
+        .and_then(|index| visible_indices.get(index))
+        .and_then(|index| app.trending_repos.get(*index));
     let details_block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.border))
@@ -458,7 +500,7 @@ fn render_trending_details(frame: &mut Frame, app: &App, area: Rect, palette: &P
 }
 
 fn render_my_repos(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palette) {
-    if app.my_repos.is_empty() {
+    if app.my_repos.is_empty() && app.filter_query.is_empty() {
         let message = if app.my_repos_loading {
             format!("Loading public repositories for {}...", app.github_username)
         } else if let Some(error) = &app.my_repos_error {
@@ -501,27 +543,35 @@ fn render_my_repos(frame: &mut Frame, app: &mut App, area: Rect, palette: &Palet
     };
     let [list_area, details_area] =
         Layout::vertical([Constraint::Min(5), Constraint::Length(8)]).areas(table_area);
+    let visible_indices = app.visible_my_repo_indices();
+    let visible_repos: Vec<&Repo> = visible_indices
+        .iter()
+        .filter_map(|index| app.my_repos.get(*index))
+        .collect();
     render_public_repo_table(
         frame,
-        &app.my_repos,
+        &visible_repos,
         &mut app.my_repos_table_state,
         list_area,
         &format!(
-            " Public repositories | sort: {} (s to change) ",
-            app.my_repos_sort.label()
+            " Public repositories ({}/{}) | sort: {} (s to change) ",
+            visible_indices.len(),
+            app.my_repos.len(),
+            app.my_repos_sort.label(),
         ),
         palette,
     );
     let selected = app
         .my_repos_table_state
         .selected()
-        .and_then(|index| app.my_repos.get(index));
+        .and_then(|index| visible_indices.get(index))
+        .and_then(|index| app.my_repos.get(*index));
     render_my_repo_details(frame, selected, details_area, palette);
 }
 
 fn render_public_repo_table(
     frame: &mut Frame,
-    repos: &[Repo],
+    repos: &[&Repo],
     state: &mut TableState,
     area: Rect,
     title: &str,
@@ -821,7 +871,29 @@ fn label_line(label: &str, value: String, palette: &Palette) -> Line<'static> {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
-    if let Some((message, _)) = &app.status_message {
+    if app.filter_active {
+        let input = Paragraph::new(Line::from(vec![
+            Span::styled(
+                "/ ",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(app.filter_query.as_str()),
+            Span::styled("█", Style::default().fg(palette.accent)),
+            Span::styled(
+                "   Enter: apply   Esc: clear",
+                Style::default().fg(palette.muted),
+            ),
+        ]))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(palette.border))
+                .title(" Quick filter "),
+        );
+        frame.render_widget(input, area);
+    } else if let Some((message, _)) = &app.status_message {
         frame.render_widget(
             Paragraph::new(format!("{message}   Tab: switch tab")).style(
                 Style::default()
@@ -840,12 +912,17 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, palette: &Palette) {
             ActiveTab::MyRepos => "   s: sort   i: issues   p: pulls",
             _ => "",
         };
+        let range_shortcut = if app.active_tab == ActiveTab::Trending {
+            "   t: time range"
+        } else {
+            ""
+        };
         let sort = match app.active_tab {
             ActiveTab::MyRepos => format!("   sort: {}", app.my_repos_sort.label()),
             _ => String::new(),
         };
         let text = format!(
-            "q: quit   Tab: switch tab   ↑/↓ j/k: select   Enter: open   c: copy clone   r: refresh{tab_shortcuts}{sort}   theme: {}   auto-refresh: {}s   {}",
+            "q: quit   Tab: switch tab   ↑/↓ j/k: select   /: filter   Enter: open   c: copy clone   r: refresh{range_shortcut}{tab_shortcuts}{sort}   T: theme ({})   auto-refresh: {}s   {}",
             app.theme, app.refresh_interval_secs, state
         );
         frame.render_widget(
